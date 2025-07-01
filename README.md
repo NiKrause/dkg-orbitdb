@@ -1,5 +1,17 @@
 # DKG with OrbitDB: Decentralized Key Generation Demo
 
+## ⚠️ **IMPORTANT DISCLAIMER - NOT FOR PRODUCTION USE**
+
+> **WARNING:** This codebase is a **proof-of-concept demonstration** developed rapidly with AI assistance in less than half a day. It has NOT undergone comprehensive security auditing, formal verification, or extensive testing required for production cryptographic systems.
+>
+> **DO NOT USE THIS CODE IN PRODUCTION ENVIRONMENTS** where real assets, private keys, or sensitive data are at stake.
+>
+> **Intended Use:** Educational purposes, research, and demonstrating technical feasibility of DKG concepts with OrbitDB.
+>
+> **For Production Systems:** Engage qualified cryptographic engineers, conduct thorough security audits, and implement industry-standard protocols with extensive testing.
+
+---
+
 This project demonstrates how **Distributed Key Generation (DKG)** can be coordinated using **OrbitDB**, a decentralized, peer-to-peer database. It showcases how multiple participants can collaboratively generate cryptographic keys and coordinate threshold signatures without relying on a central server.
 
 ## 🔑 What is Distributed Key Generation (DKG)?
@@ -25,12 +37,14 @@ OrbitDB provides the perfect infrastructure for DKG coordination because it offe
 
 ```
 ├── test/
-│   ├── dkg.test.js                 # Basic DKG simulation
-│   ├── simple-real-dkg.test.js     # Real Shamir's Secret Sharing math
-│   ├── orbitdb-dkg.test.js         # DKG coordination with OrbitDB
-│   ├── orbitdb-replication.test.js # Official OrbitDB replication test
-│   ├── real-dkg-orbitdb.test.js    # Complete DKG protocol (advanced)
-│   └── utils/                      # OrbitDB utility functions
+│   ├── dkg.test.js                     # Basic DKG simulation
+│   ├── simple-real-dkg.test.js         # Real Shamir's Secret Sharing math
+│   ├── orbitdb-dkg.test.js             # DKG coordination with OrbitDB
+│   ├── orbitdb-replication.test.js     # Official OrbitDB replication test
+│   ├── real-dkg-orbitdb.test.js        # Complete DKG protocol (advanced)
+│   ├── chainlink-vrf-dkg.test.js       # Mock Chainlink VRF integration
+│   ├── real-chainlink-vrf-dkg.test.js  # REAL Chainlink VRF on Sepolia
+│   └── utils/                          # OrbitDB utility functions
 ├── package.json
 └── README.md
 ```
@@ -126,6 +140,34 @@ await db1.add({
 - **Event-driven protocol** - Participants react to each other's actions
 - **Audit trail** - All protocol steps are immutably recorded
 
+### 3. `chainlink-vrf-dkg.test.js` + `real-chainlink-vrf-dkg.test.js` - VRF-Based DKG
+
+These tests demonstrate **integration with Chainlink VRF** for verifiable randomness in DKG:
+
+```javascript
+// Mock VRF for development
+class MockChainlinkVRF {
+  async requestRandomness() {
+    return { requestId: '123', randomValue: '0xabc...', verified: true };
+  }
+}
+
+// Real VRF connecting to Sepolia testnet
+class RealChainlinkVRF {
+  async getLatestVRFRandomness() {
+    // Searches Sepolia for actual VRF fulfillments
+    const events = await vrfCoordinator.queryFilter(fulfillmentFilter);
+    return realBlockchainRandomness;
+  }
+}
+```
+
+**What it demonstrates:**
+- **Verifiable randomness** - Using Chainlink VRF for polynomial generation
+- **Real blockchain integration** - Connects to Ethereum Sepolia testnet
+- **Production-ready randomness** - Cryptographically secure entropy source
+- **On-chain verification** - All randomness is verifiable on Ethereum
+
 ## ❓ Key Questions Answered
 
 ### **"Does real Shamir's Secret Sharing need a central coordinator?"**
@@ -171,6 +213,75 @@ const secret = shares.reduce((sum, share, i) => {
 - ✅ **Threshold security** - k-1 shares reveal nothing about secret
 - ✅ **Cryptographic soundness** - Provably secure reconstruction
 - ✅ **Verifiable shares** - Public commitments enable verification
+
+### **"If secret shares are stored on a public ledger like OrbitDB/IPFS, does this create a security vulnerability for private key reconstruction?"**
+
+**Answer: NO - This is cryptographically secure by design!** Here's why:
+
+#### **Threshold Security Guarantee**
+```javascript
+// In a 2-of-3 threshold scheme:
+const shares = [
+  { participant: 'Alice', x: 1, y: share1 },   // Public on OrbitDB
+  { participant: 'Bob',   x: 2, y: share2 },   // Public on OrbitDB  
+  { participant: 'Carol', x: 3, y: share3 }    // Public on OrbitDB
+];
+
+// ANY 2 shares can reconstruct the secret
+// But 1 share reveals ZERO information about the secret
+```
+
+#### **What Gets Stored Publicly vs. Privately**
+
+**❌ NEVER stored publicly:**
+```javascript
+// Each participant's individual secret shares FROM others
+participant1.receivedShares = [
+  { from: 'Bob',   value: secretShare_Bob_to_Alice },    // PRIVATE
+  { from: 'Carol', value: secretShare_Carol_to_Alice }   // PRIVATE
+];
+```
+
+**✅ Safe to store publicly:**
+```javascript
+// Only polynomial commitments (public keys) are broadcast
+await orbitdb.add({
+  type: 'polynomial_commitment',
+  from: 'Alice',
+  commitments: [
+    'G^coeff0',  // Public key = G * coefficient (NOT the coefficient itself)
+    'G^coeff1',  // These allow verification but reveal no secrets
+    'G^coeff2'
+  ]
+});
+```
+
+#### **Security Analysis**
+
+1. **Public commitments are cryptographically safe** - They're elliptic curve points (public keys) that allow verification but cannot be reversed to find private coefficients
+
+2. **Secret shares are transmitted privately** - Each participant encrypts shares using recipients' public keys before sending
+
+3. **Threshold property holds** - Even if an attacker sees all public commitments, they cannot reconstruct the private key without collecting enough private shares
+
+4. **Information-theoretic security** - With k-1 shares, the secret could be ANY value with equal probability
+
+#### **Example Attack Scenario (and why it fails):**
+```javascript
+// Attacker sees all public data on OrbitDB:
+const publicData = {
+  commitments_Alice: ['G^a0', 'G^a1', 'G^a2'],   // Alice's polynomial commitments
+  commitments_Bob:   ['G^b0', 'G^b1', 'G^b2'],   // Bob's polynomial commitments  
+  commitments_Carol: ['G^c0', 'G^c1', 'G^c2']    // Carol's polynomial commitments
+};
+
+// ❌ ATTACK FAILS: Attacker cannot:
+// 1. Reverse G^coefficient to find coefficient (discrete log problem)
+// 2. Access private shares (encrypted point-to-point)
+// 3. Reconstruct without threshold number of shares
+```
+
+**✅ Conclusion:** Storing polynomial commitments on public ledgers is not only safe - it's essential for verification and the core security model of verifiable secret sharing!
 
 ## 🚀 Real-World Use Cases
 
@@ -257,7 +368,20 @@ npm test
 npm test -- --grep "DKG Test"                              # Basic DKG
 npm test -- --grep "DKG and Transaction Signing"          # OrbitDB coordination  
 npm test -- --grep "Replicating databases"                # OrbitDB replication
+npm test -- --grep "Mock Chainlink VRF"                   # Mock VRF integration
+npm test -- --grep "Real Chainlink VRF"                   # Real VRF on Sepolia
 ```
+
+### For Real Chainlink VRF Tests
+
+```bash
+# Setup environment (optional - tests work without this)
+cp .env.example .env
+# Edit .env and add your Sepolia RPC URL:
+# SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/your-key
+```
+
+**Note:** Real VRF tests connect to Ethereum Sepolia testnet. They work with the free Alchemy demo endpoint but you can add your own RPC URL for better reliability.
 
 ### Test Output
 ```
